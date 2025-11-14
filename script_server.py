@@ -289,6 +289,23 @@ EDITOR_TEMPLATE = """
             margin: 10px 0;
             word-break: break-all;
         }
+        .loadstring-box {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 2px solid #2196F3;
+        }
+        .loadstring-box textarea {
+            background: #0a0a0a;
+            color: #4CAF50;
+            font-family: 'Courier New', monospace;
+            cursor: text;
+        }
+        .loadstring-box textarea:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
         textarea {
             width: 100%;
             height: 200px;
@@ -644,22 +661,47 @@ EDITOR_TEMPLATE = """
 
             const response = await fetch(`/api/scripts/${folder}`);
             const scripts = await response.json();
+            
+            // Get analytics for all scripts
+            const analyticsPromises = scripts.map(script => 
+                fetch(`/api/analytics/script/${folder}/${script.name}`).then(r => r.json())
+            );
+            const analyticsData = await Promise.all(analyticsPromises);
+            
             const grid = document.getElementById('scriptsGrid');
             
-            grid.innerHTML = scripts.map(script => `
+            grid.innerHTML = scripts.map((script, index) => {
+                const analytics = analyticsData[index];
+                const loadCount = analytics.total_loads || 0;
+                const uniqueIPs = analytics.unique_ips || 0;
+                const lastIP = analytics.last_ip || 'No loads yet';
+                
+                const scriptUrl = `${serverUrl}/scripts/${folder}/${script.name}`;
+                const loadstringCode = `loadstring(game:HttpGet("${scriptUrl}"))()`;
+                
+                return `
                 <div class="script-card" id="card-${script.name}" onclick="toggleSelect('${script.name}', event)">
                     <h3>
                         <input type="checkbox" class="select-checkbox" id="check-${script.name}" onclick="toggleSelect('${script.name}', event)">
                         ${script.name}
+                        <span class="script-stat-badge" title="Total loads">📊 ${loadCount}</span>
+                        ${uniqueIPs > 0 ? `<span class="script-stat-badge" title="Unique IPs">👥 ${uniqueIPs}</span>` : ''}
                     </h3>
-                    <div class="script-url">${serverUrl}/scripts/${folder}/${script.name}</div>
+                    ${lastIP !== 'No loads yet' ? `<div style="font-size: 11px; color: #aaa; margin: 5px 0;">🌐 Last IP: ${lastIP}</div>` : ''}
+                    <div class="loadstring-box" onclick="event.stopPropagation()">
+                        <div style="font-size: 11px; color: #aaa; margin-bottom: 5px;">Loadstring Code:</div>
+                        <textarea readonly onclick="this.select()" style="height: 60px; font-size: 11px; cursor: text;">${loadstringCode}</textarea>
+                        <button class="btn btn-copy" onclick="copyLoadstring('${loadstringCode}', event)" style="margin-top: 5px;">📋 Copy Loadstring</button>
+                    </div>
+                    <div class="script-url">${scriptUrl}</div>
                     <textarea id="editor-${script.name}">${script.content}</textarea>
                     <button class="btn btn-save" onclick="saveScript('${script.name}', event)">Save</button>
                     <button class="btn btn-copy" onclick="copyUrl('${folder}', '${script.name}', event)">Copy URL</button>
+                    <button class="btn btn-new" onclick="showScriptAnalytics('${folder}', '${script.name}', event)">📊 Stats</button>
                     <button class="btn btn-delete" onclick="deleteScript('${script.name}', event)">Delete</button>
                     <div id="status-${script.name}"></div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function toggleSelect(scriptName, event) {
@@ -796,6 +838,12 @@ EDITOR_TEMPLATE = """
             alert('URL copied to clipboard!');
         }
 
+        function copyLoadstring(code, event) {
+            event.stopPropagation();
+            navigator.clipboard.writeText(code);
+            alert('Loadstring copied to clipboard!');
+        }
+
         async function createFolder() {
             const name = document.getElementById('newFolderName').value.trim();
             if (!name) return alert('Enter folder name');
@@ -922,6 +970,85 @@ EDITOR_TEMPLATE = """
             } else {
                 status.innerHTML = `<span class="error">✗ Error: ${result.error || 'Failed'}</span>`;
             }
+        }
+
+        // Analytics functions
+        async function showAnalytics() {
+            document.getElementById('analyticsModal').classList.add('active');
+            await loadAnalytics();
+        }
+
+        function closeAnalytics() {
+            document.getElementById('analyticsModal').classList.remove('active');
+        }
+
+        async function loadAnalytics() {
+            const response = await fetch('/api/analytics/overview');
+            const data = await response.json();
+            
+            // Update stats cards
+            document.getElementById('analyticsStats').innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${data.total_loads.toLocaleString()}</div>
+                    <div class="stat-label">Total Script Loads</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.total_scripts}</div>
+                    <div class="stat-label">Scripts Tracked</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${data.top_scripts.length > 0 ? data.top_scripts[0].loads : 0}</div>
+                    <div class="stat-label">Most Popular Script</div>
+                </div>
+            `;
+            
+            // Update top scripts table
+            document.getElementById('topScriptsTable').innerHTML = data.top_scripts.map(s => `
+                <tr>
+                    <td><strong>${s.script}</strong></td>
+                    <td>${s.loads.toLocaleString()}</td>
+                    <td>${s.unique_ips}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="3" style="text-align: center; color: #aaa;">No data yet</td></tr>';
+            
+            // Update recent activity table
+            document.getElementById('recentActivityTable').innerHTML = data.recent_activity.map(a => {
+                const date = new Date(a.timestamp);
+                const timeStr = date.toLocaleTimeString() + ' - ' + date.toLocaleDateString();
+                return `
+                    <tr>
+                        <td>${timeStr}</td>
+                        <td>${a.script}</td>
+                        <td>${a.ip || 'N/A'}</td>
+                    </tr>
+                `;
+            }).join('') || '<tr><td colspan="3" style="text-align: center; color: #aaa;">No activity yet</td></tr>';
+        }
+
+        async function resetAnalytics() {
+            if (!confirm('Are you sure you want to reset ALL analytics data? This cannot be undone!')) return;
+            
+            const response = await fetch('/api/analytics/reset', { method: 'POST' });
+            if (response.ok) {
+                alert('Analytics reset successfully!');
+                loadAnalytics();
+            }
+        }
+
+        async function showScriptAnalytics(folder, script, event) {
+            if (event) event.stopPropagation();
+            
+            const response = await fetch(`/api/analytics/script/${folder}/${script}`);
+            const data = await response.json();
+            
+            const firstLoad = data.first_load ? new Date(data.first_load).toLocaleString() : 'Never';
+            const lastLoad = data.last_load ? new Date(data.last_load).toLocaleString() : 'Never';
+            
+            alert(`📊 Analytics for ${script}\n\n` +
+                  `Total Loads: ${data.total_loads}\n` +
+                  `Unique IPs: ${data.unique_ips}\n` +
+                  `First Load: ${firstLoad}\n` +
+                  `Last Load: ${lastLoad}`);
         }
     </script>
 </body>
@@ -1145,12 +1272,16 @@ def analytics_script(folder, filename):
         recent = [h for h in analytics["history"] if h["script"] == script_key][-20:]
         recent.reverse()
         
+        # Get last IP from recent history
+        last_ip = recent[0]["ip"] if recent and recent[0].get("ip") else None
+        
         return jsonify({
             "script": script_key,
             "total_loads": data["total_loads"],
             "unique_ips": len(data.get("unique_ips", [])),
             "first_load": data.get("first_load"),
             "last_load": data.get("last_load"),
+            "last_ip": last_ip,
             "recent_loads": recent
         })
     
@@ -1158,6 +1289,7 @@ def analytics_script(folder, filename):
         "script": script_key,
         "total_loads": 0,
         "unique_ips": 0,
+        "last_ip": None,
         "recent_loads": []
     })
 
