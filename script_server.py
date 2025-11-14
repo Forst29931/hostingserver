@@ -5,11 +5,14 @@ import json
 from functools import wraps
 import secrets
 import re
+from datetime import datetime
+from collections import defaultdict
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)  # Random secret key for sessions
 BASE_DIR = "lua_scripts"  # Main folder containing all your script folders
 CONFIG_FILE = "server_config.json"
+ANALYTICS_FILE = "analytics.json"
 
 # Natural sorting function for proper numeric ordering
 def natural_sort_key(text):
@@ -17,6 +20,57 @@ def natural_sort_key(text):
     Sort strings with numbers naturally (VPS1, VPS2, VPS10 instead of VPS1, VPS10, VPS2)
     """
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)]
+
+# Load or create analytics data
+def load_analytics():
+    if os.path.exists(ANALYTICS_FILE):
+        with open(ANALYTICS_FILE, 'r') as f:
+            return json.load(f)
+    return {"total_loads": 0, "scripts": {}, "history": []}
+
+def save_analytics(data):
+    with open(ANALYTICS_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def track_script_load(folder, filename, ip_address=None):
+    analytics = load_analytics()
+    
+    # Update total loads
+    analytics["total_loads"] += 1
+    
+    # Create script key
+    script_key = f"{folder}/{filename}"
+    
+    # Initialize script data if not exists
+    if script_key not in analytics["scripts"]:
+        analytics["scripts"][script_key] = {
+            "total_loads": 0,
+            "first_load": datetime.now().isoformat(),
+            "last_load": datetime.now().isoformat(),
+            "unique_ips": []
+        }
+    
+    # Update script stats
+    analytics["scripts"][script_key]["total_loads"] += 1
+    analytics["scripts"][script_key]["last_load"] = datetime.now().isoformat()
+    
+    # Track unique IPs (store only last 100 to avoid bloat)
+    if ip_address and ip_address not in analytics["scripts"][script_key]["unique_ips"]:
+        analytics["scripts"][script_key]["unique_ips"].append(ip_address)
+        if len(analytics["scripts"][script_key]["unique_ips"]) > 100:
+            analytics["scripts"][script_key]["unique_ips"].pop(0)
+    
+    # Add to history (keep last 1000 events)
+    analytics["history"].append({
+        "timestamp": datetime.now().isoformat(),
+        "script": script_key,
+        "ip": ip_address
+    })
+    if len(analytics["history"]) > 1000:
+        analytics["history"] = analytics["history"][-1000:]
+    
+    save_analytics(analytics)
+    return analytics
 
 # Default credentials (you should change these!)
 DEFAULT_CONFIG = {
@@ -335,13 +389,111 @@ EDITOR_TEMPLATE = """
             color: #aaa;
             font-size: 12px;
         }
+        .analytics-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        .analytics-modal.active {
+            display: block;
+        }
+        .analytics-content {
+            background: #1e1e1e;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 30px;
+            border-radius: 10px;
+            border: 2px solid #4CAF50;
+        }
+        .analytics-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        .analytics-header h2 {
+            color: #4CAF50;
+            margin: 0;
+        }
+        .close-analytics {
+            background: #f44336;
+            color: #fff;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .analytics-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border: 2px solid #444;
+        }
+        .stat-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .stat-label {
+            color: #aaa;
+            margin-top: 10px;
+        }
+        .analytics-table {
+            width: 100%;
+            margin: 20px 0;
+            background: #2d2d2d;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .analytics-table th {
+            background: #3d3d3d;
+            padding: 15px;
+            text-align: left;
+            color: #4CAF50;
+        }
+        .analytics-table td {
+            padding: 12px 15px;
+            border-top: 1px solid #444;
+        }
+        .analytics-section {
+            margin: 30px 0;
+        }
+        .analytics-section h3 {
+            color: #4CAF50;
+            margin-bottom: 15px;
+        }
+        .script-stat-badge {
+            display: inline-block;
+            background: #3d3d3d;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-left: 5px;
+            color: #4CAF50;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🚀 Roblox Script Server Manager</h1>
-            <a href="/logout" class="logout-btn">Logout</a>
+            <div>
+                <button class="btn btn-new" onclick="showAnalytics()" style="margin-right: 10px;">📊 Analytics</button>
+                <a href="/logout" class="logout-btn">Logout</a>
+            </div>
         </div>
         
         <div class="actions">
@@ -416,6 +568,50 @@ EDITOR_TEMPLATE = """
 
         <h2>Scripts:</h2>
         <div class="scripts-grid" id="scriptsGrid"></div>
+
+        <!-- Analytics Modal -->
+        <div class="analytics-modal" id="analyticsModal">
+            <div class="analytics-content">
+                <div class="analytics-header">
+                    <h2>📊 Script Analytics</h2>
+                    <button class="close-analytics" onclick="closeAnalytics()">Close</button>
+                </div>
+
+                <div class="analytics-stats" id="analyticsStats"></div>
+
+                <div class="analytics-section">
+                    <h3>🔥 Top 10 Most Loaded Scripts</h3>
+                    <table class="analytics-table">
+                        <thead>
+                            <tr>
+                                <th>Script</th>
+                                <th>Total Loads</th>
+                                <th>Unique IPs</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topScriptsTable"></tbody>
+                    </table>
+                </div>
+
+                <div class="analytics-section">
+                    <h3>📈 Recent Activity (Last 50)</h3>
+                    <table class="analytics-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Script</th>
+                                <th>IP Address</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recentActivityTable"></tbody>
+                    </table>
+                </div>
+
+                <div style="text-align: center; margin-top: 30px;">
+                    <button class="btn btn-delete" onclick="resetAnalytics()">Reset All Analytics</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -767,6 +963,10 @@ def serve_script(folder, filename):
     
     filepath = os.path.join(BASE_DIR, folder, filename)
     if os.path.exists(filepath):
+        # Track analytics (get IP from request)
+        ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+        track_script_load(folder, filename, ip_address)
+        
         return send_file(filepath, mimetype='text/plain')
     abort(404)
 
@@ -902,6 +1102,71 @@ def mass_create_scripts(folder):
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/analytics/overview')
+@login_required
+def analytics_overview():
+    """Get overall analytics"""
+    analytics = load_analytics()
+    
+    # Calculate some stats
+    total_scripts = len(analytics["scripts"])
+    total_loads = analytics["total_loads"]
+    
+    # Get top 10 most loaded scripts
+    top_scripts = sorted(
+        analytics["scripts"].items(),
+        key=lambda x: x[1]["total_loads"],
+        reverse=True
+    )[:10]
+    
+    # Recent activity (last 50)
+    recent = analytics["history"][-50:]
+    recent.reverse()
+    
+    return jsonify({
+        "total_scripts": total_scripts,
+        "total_loads": total_loads,
+        "top_scripts": [{"script": k, "loads": v["total_loads"], "unique_ips": len(v.get("unique_ips", []))} for k, v in top_scripts],
+        "recent_activity": recent
+    })
+
+@app.route('/api/analytics/script/<folder>/<filename>')
+@login_required
+def analytics_script(folder, filename):
+    """Get analytics for specific script"""
+    analytics = load_analytics()
+    script_key = f"{folder}/{filename}"
+    
+    if script_key in analytics["scripts"]:
+        data = analytics["scripts"][script_key]
+        
+        # Get recent loads for this script
+        recent = [h for h in analytics["history"] if h["script"] == script_key][-20:]
+        recent.reverse()
+        
+        return jsonify({
+            "script": script_key,
+            "total_loads": data["total_loads"],
+            "unique_ips": len(data.get("unique_ips", [])),
+            "first_load": data.get("first_load"),
+            "last_load": data.get("last_load"),
+            "recent_loads": recent
+        })
+    
+    return jsonify({
+        "script": script_key,
+        "total_loads": 0,
+        "unique_ips": 0,
+        "recent_loads": []
+    })
+
+@app.route('/api/analytics/reset', methods=['POST'])
+@login_required
+def analytics_reset():
+    """Reset all analytics"""
+    save_analytics({"total_loads": 0, "scripts": {}, "history": []})
+    return jsonify({"success": True})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Use PORT from environment or 5000
