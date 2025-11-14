@@ -1,0 +1,7 @@
+server_config.json
+lua_scripts/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.DS_Store
