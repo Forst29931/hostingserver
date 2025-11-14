@@ -12,8 +12,8 @@ CONFIG_FILE = "server_config.json"
 
 # Default credentials (you should change these!)
 DEFAULT_CONFIG = {
-    "username": "admin",
-    "password": "changeme123"  # CHANGE THIS!
+    "username": "chen",
+    "password": "cagueinalol"  # CHANGE THIS!
 }
 
 # Create base directory if it doesn't exist
