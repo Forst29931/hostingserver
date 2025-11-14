@@ -4,16 +4,24 @@ from pathlib import Path
 import json
 from functools import wraps
 import secrets
+import re
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)  # Random secret key for sessions
 BASE_DIR = "lua_scripts"  # Main folder containing all your script folders
 CONFIG_FILE = "server_config.json"
 
+# Natural sorting function for proper numeric ordering
+def natural_sort_key(text):
+    """
+    Sort strings with numbers naturally (VPS1, VPS2, VPS10 instead of VPS1, VPS10, VPS2)
+    """
+    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)]
+
 # Default credentials (you should change these!)
 DEFAULT_CONFIG = {
-    "username": "script",
-    "password": "scipt"  # CHANGE THIS!
+    "username": "admin",
+    "password": "changeme123"  # CHANGE THIS!
 }
 
 # Create base directory if it doesn't exist
@@ -306,6 +314,27 @@ EDITOR_TEMPLATE = """
             color: #FF9800;
             font-weight: bold;
         }
+        .mass-create-panel {
+            display: none;
+            background: #2d2d2d;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border: 2px solid #2196F3;
+        }
+        .mass-create-panel.active {
+            display: block;
+        }
+        .mass-create-panel h3 {
+            color: #2196F3;
+            margin-top: 0;
+        }
+        .mass-create-panel label {
+            display: block;
+            margin-bottom: 5px;
+            color: #aaa;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -321,6 +350,46 @@ EDITOR_TEMPLATE = """
             
             <input type="text" id="newScriptName" placeholder="New script name (e.g., loader.lua)">
             <button class="btn btn-new" onclick="createScript()">Create Script</button>
+            
+            <button class="btn btn-new" onclick="toggleMassCreate()">📦 Mass Create Scripts</button>
+        </div>
+
+        <div class="mass-create-panel" id="massCreatePanel">
+            <h3>📦 Mass Create Scripts</h3>
+            <p>Create multiple scripts at once with sequential numbering</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0;">
+                <div>
+                    <label>Prefix:</label>
+                    <input type="text" id="massPrefix" placeholder="e.g., VPS" style="width: 100%;">
+                </div>
+                <div>
+                    <label>Extension:</label>
+                    <select id="massExtension" style="width: 100%; padding: 8px; background: #2d2d2d; border: 1px solid #444; color: #fff; border-radius: 3px;">
+                        <option>.lua</option>
+                        <option>.txt</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Start Number:</label>
+                    <input type="number" id="massStart" placeholder="e.g., 1" value="1" style="width: 100%;">
+                </div>
+                <div>
+                    <label>End Number:</label>
+                    <input type="number" id="massEnd" placeholder="e.g., 10" value="10" style="width: 100%;">
+                </div>
+            </div>
+            <div style="margin: 10px 0;">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="massZeroPad" checked style="width: 18px; height: 18px;">
+                    <span>Add zero-padding (VPS01, VPS02... instead of VPS1, VPS2...)</span>
+                </label>
+            </div>
+            <div style="background: #1a1a1a; padding: 10px; border-radius: 5px; margin: 10px 0;">
+                <strong>Preview:</strong> <span id="massPreview">VPS1.lua, VPS2.lua, VPS3.lua...</span>
+            </div>
+            <button class="btn btn-mass-save" onclick="executeMassCreate()">Create Scripts</button>
+            <button class="btn btn-new" onclick="toggleMassCreate()">Cancel</button>
+            <div id="massCreateStatus"></div>
         </div>
 
         <div class="mass-edit-bar">
@@ -567,6 +636,97 @@ EDITOR_TEMPLATE = """
 
         // Load folders on page load
         loadFolders();
+
+        // Mass create functions
+        function toggleMassCreate() {
+            const panel = document.getElementById('massCreatePanel');
+            panel.classList.toggle('active');
+            if (panel.classList.contains('active')) {
+                updateMassPreview();
+            }
+        }
+
+        function updateMassPreview() {
+            const prefix = document.getElementById('massPrefix').value || 'VPS';
+            const start = parseInt(document.getElementById('massStart').value) || 1;
+            const end = parseInt(document.getElementById('massEnd').value) || 10;
+            const ext = document.getElementById('massExtension').value;
+            const zeroPad = document.getElementById('massZeroPad').checked;
+            
+            if (end - start > 100) {
+                document.getElementById('massPreview').textContent = 'Too many files! Max 100 at once.';
+                return;
+            }
+            
+            const padding = zeroPad ? String(end).length : 0;
+            
+            const examples = [];
+            for (let i = start; i <= Math.min(start + 2, end); i++) {
+                const num = zeroPad ? String(i).padStart(padding, '0') : String(i);
+                examples.push(`${prefix}${num}${ext}`);
+            }
+            if (end > start + 2) {
+                examples.push('...');
+                const num = zeroPad ? String(end).padStart(padding, '0') : String(end);
+                examples.push(`${prefix}${num}${ext}`);
+            }
+            
+            document.getElementById('massPreview').textContent = examples.join(', ');
+        }
+
+        // Update preview when inputs change
+        document.addEventListener('DOMContentLoaded', function() {
+            ['massPrefix', 'massStart', 'massEnd', 'massExtension', 'massZeroPad'].forEach(id => {
+                const elem = document.getElementById(id);
+                if (elem) {
+                    elem.addEventListener('input', updateMassPreview);
+                    elem.addEventListener('change', updateMassPreview);
+                }
+            });
+        });
+
+        async function executeMassCreate() {
+            if (!currentFolder) return alert('Select a folder first');
+            
+            const prefix = document.getElementById('massPrefix').value.trim();
+            const start = parseInt(document.getElementById('massStart').value);
+            const end = parseInt(document.getElementById('massEnd').value);
+            const ext = document.getElementById('massExtension').value;
+            const zeroPad = document.getElementById('massZeroPad').checked;
+            
+            if (!prefix) return alert('Enter a prefix');
+            if (isNaN(start) || isNaN(end)) return alert('Enter valid numbers');
+            if (end < start) return alert('End number must be >= start number');
+            if (end - start > 100) return alert('Too many files! Max 100 at once');
+            
+            const status = document.getElementById('massCreateStatus');
+            status.innerHTML = '<span style="color: #FF9800;">Creating scripts...</span>';
+            
+            const response = await fetch(`/api/mass-create/${currentFolder}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    prefix: prefix,
+                    start: start,
+                    end: end,
+                    extension: ext,
+                    zero_pad: zeroPad
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (response.ok) {
+                status.innerHTML = `<span class="success">✓ Created ${result.created} scripts!</span>`;
+                setTimeout(() => {
+                    toggleMassCreate();
+                    loadScripts(currentFolder);
+                    status.innerHTML = '';
+                }, 1500);
+            } else {
+                status.innerHTML = `<span class="error">✗ Error: ${result.error || 'Failed'}</span>`;
+            }
+        }
     </script>
 </body>
 </html>
@@ -616,6 +776,7 @@ def get_folders():
     """Get list of all folders"""
     folders = [f for f in os.listdir(BASE_DIR) 
                if os.path.isdir(os.path.join(BASE_DIR, f))]
+    folders.sort(key=natural_sort_key)
     return jsonify(folders)
 
 @app.route('/api/scripts/<folder>')
@@ -626,15 +787,18 @@ def get_scripts(folder):
     if not os.path.exists(folder_path):
         return jsonify([])
     
+    # Get all lua files and sort them naturally
+    filenames = [f for f in os.listdir(folder_path) if f.endswith('.lua')]
+    filenames.sort(key=natural_sort_key)
+    
     scripts = []
-    for filename in os.listdir(folder_path):
-        if filename.endswith('.lua'):
-            filepath = os.path.join(folder_path, filename)
-            with open(filepath, 'r', encoding='utf-8') as f:
-                scripts.append({
-                    'name': filename,
-                    'content': f.read()
-                })
+    for filename in filenames:
+        filepath = os.path.join(folder_path, filename)
+        with open(filepath, 'r', encoding='utf-8') as f:
+            scripts.append({
+                'name': filename,
+                'content': f.read()
+            })
     return jsonify(scripts)
 
 @app.route('/api/save/<folder>/<filename>', methods=['POST'])
@@ -696,6 +860,48 @@ def create_script(folder):
             f.write('-- New script\nprint("Hello from script server!")\n')
     
     return jsonify({'success': True})
+
+@app.route('/api/mass-create/<folder>', methods=['POST'])
+@login_required
+def mass_create_scripts(folder):
+    """Mass create multiple scripts with numbering"""
+    try:
+        data = request.json
+        prefix = data.get('prefix', '').strip()
+        start = int(data.get('start', 1))
+        end = int(data.get('end', 10))
+        extension = data.get('extension', '.lua')
+        zero_pad = data.get('zero_pad', True)
+        
+        if not prefix:
+            return jsonify({'error': 'Prefix required'}), 400
+        if end < start:
+            return jsonify({'error': 'End must be >= start'}), 400
+        if end - start > 100:
+            return jsonify({'error': 'Max 100 scripts at once'}), 400
+        
+        folder_path = os.path.join(BASE_DIR, folder)
+        os.makedirs(folder_path, exist_ok=True)
+        
+        # Calculate padding length
+        padding = len(str(end)) if zero_pad else 0
+        
+        created = 0
+        for i in range(start, end + 1):
+            # Format number with zero-padding if enabled
+            num_str = str(i).zfill(padding) if zero_pad else str(i)
+            filename = f"{prefix}{num_str}{extension}"
+            filepath = os.path.join(folder_path, filename)
+            
+            if not os.path.exists(filepath):
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(f'-- {filename}\n-- Created by mass create\nprint("Script {i}")\n')
+                created += 1
+        
+        return jsonify({'success': True, 'created': created})
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Use PORT from environment or 5000
