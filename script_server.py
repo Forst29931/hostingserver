@@ -7,10 +7,22 @@ import secrets
 import re
 from datetime import datetime
 from collections import defaultdict
+from flask_session import Session
+import redis
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)  # Random secret key for sessions
-BASE_DIR = "lua_scripts"  # Main folder containing all your script folders
+app.secret_key = secrets.token_hex(32)
+
+# Configure Redis session storage
+app.config['SESSION_TYPE'] = 'redis'
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_REDIS'] = redis.from_url('redis://localhost:6379')
+
+# Initialize session
+Session(app)
+
+BASE_DIR = "lua_scripts"
 CONFIG_FILE = "server_config.json"
 ANALYTICS_FILE = "analytics.json"
 
